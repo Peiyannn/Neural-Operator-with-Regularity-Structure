@@ -14,7 +14,7 @@ We conduct experiments on the dynamic Φ41 model, the parabolic equation with mu
   - `Rule.py` (helper class that generates the rule for creating the model feature set)，
   - `Model.py` (generates model features).
 - `Data`: conventional solvers used to generate the datasets for the 2d stochastic Navier-Stokes equation.
-- `NORS_1d_time.py`, `NORS_2d.py`: the NORS for 1d spatial + 1d temporal equation problem such as the Φ41 equation and the parabolic equation with multiplicative forcing.
+- `NORS_1d_time.py`: the NORS for 1d spatial + 1d temporal equation problem such as the Φ41 equation and the parabolic equation with multiplicative forcing.
 - `NORS_2d.py`: the NORS for 2d spatial equation problem such as the 2d stochastic Navier-Stokes equation.
 - `model_xxx.py`: generates the model feature vectors.
 - `phi41_time.py`, `multi_time.py`, `NS.py`: trains and evaluates an NORS on three SPDEs.
