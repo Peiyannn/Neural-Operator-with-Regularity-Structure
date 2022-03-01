@@ -5,7 +5,6 @@ from Classes.SPDEs import *
 from Classes.Rule import *
 from Classes.Model import *
 from Classes.Noise import *
-from Classes.full_visualization import *
 
 from Data.generator_sns import navier_stokes_2d
 from Data.random_forcing import GaussianRF
