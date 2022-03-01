@@ -1,160 +1,19 @@
-from SPDEs import *
-from Rule import *
-from Model import *
-from Noise import *
-from full_visualization import *
+# adapted from https://github.com/zongyi-li/fourier_neural_operator
 
-
-from IPython import embed
-
+from NORS_2d import NORS_space2D, train_nors_2d
+from utilities1 import count_params, LpLoss, UnitGaussianNormalizer
 
 import numpy as np
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from torch.nn.parameter import Parameter
-import matplotlib.pyplot as plt
-
-import operator
-from functools import reduce
-from functools import partial
-from timeit import default_timer
-from utilities3 import *
-
-from Adam import Adam
 
 torch.manual_seed(0)
 np.random.seed(0)
-
-
-################################################################
-#  2d fourier layer
-################################################################
-class SpectralConv2d(nn.Module):
-    def __init__(self, in_channels, out_channels, modes1, modes2):
-        super(SpectralConv2d, self).__init__()
-
-        """
-        2D Fourier layer. It does FFT, linear transform, and Inverse FFT.    
-        """
-
-        self.in_channels = in_channels
-        self.out_channels = out_channels
-        self.modes1 = modes1 #Number of Fourier modes to multiply, at most floor(N/2) + 1
-        self.modes2 = modes2
-
-        self.scale = (1 / (in_channels * out_channels))
-        self.weights1 = nn.Parameter(self.scale * torch.rand(in_channels, out_channels, self.modes1, self.modes2, dtype=torch.cfloat))
-        self.weights2 = nn.Parameter(self.scale * torch.rand(in_channels, out_channels, self.modes1, self.modes2, dtype=torch.cfloat))
-
-    # Complex multiplication
-    def compl_mul2d(self, input, weights):
-        # (batch, in_channel, x,y ), (in_channel, out_channel, x,y) -> (batch, out_channel, x,y)
-        return torch.einsum("bixy,ioxy->boxy", input, weights)
-
-    def forward(self, x):
-        batchsize = x.shape[0]
-        #Compute Fourier coeffcients up to factor of e^(- something constant)
-        x_ft = torch.fft.rfft2(x)
-
-        # Multiply relevant Fourier modes
-        out_ft = torch.zeros(batchsize, self.out_channels,  x.size(-2), x.size(-1)//2 + 1, dtype=torch.cfloat, device=x.device)
-        out_ft[:, :, :self.modes1, :self.modes2] = \
-            self.compl_mul2d(x_ft[:, :, :self.modes1, :self.modes2], self.weights1)
-        out_ft[:, :, -self.modes1:, :self.modes2] = \
-            self.compl_mul2d(x_ft[:, :, -self.modes1:, :self.modes2], self.weights2)
-
-        #Return to physical space
-        x = torch.fft.irfft2(out_ft, s=(x.size(-2), x.size(-1)))
-        return x
-
-class FNO2d(nn.Module):
-    def __init__(self, modes1, modes2, width, shape):
-        super(FNO2d, self).__init__()
-
-        """
-        The overall network. It contains 4 layers of the Fourier layer.
-        1. Lift the input to the desire channel dimension by self.fc0 .
-        2. 4 layers of the integral operators u' = (W + K)(u).
-            W defined by self.w; K defined by self.conv .
-        3. Project from the channel space to the output space by self.fc1 and self.fc2 .
-        
-        input: the solution of the coefficient function and locations (a(x, y), x, y)
-        input shape: (batchsize, x=s, y=s, c=3)
-        output: the solution 
-        output shape: (batchsize, x=s, y=s, c=1)
-        """
-
-        self.modes1 = modes1
-        self.modes2 = modes2
-        self.width = width
-        self.padding = 9 # pad the domain if input is non-periodic
-        self.shape = shape
-        self.fc0 = nn.Linear(self.shape[3]+2, self.width) # input channel is 3: (I[a(x, y)], Ic[a],..., x, y)
-
-        self.conv0 = SpectralConv2d(self.width, self.width, self.modes1, self.modes2)
-        self.conv1 = SpectralConv2d(self.width, self.width, self.modes1, self.modes2)
-        self.conv2 = SpectralConv2d(self.width, self.width, self.modes1, self.modes2)
-        self.conv3 = SpectralConv2d(self.width, self.width, self.modes1, self.modes2)
-        self.w0 = nn.Conv2d(self.width, self.width, 1)
-        self.w1 = nn.Conv2d(self.width, self.width, 1)
-        self.w2 = nn.Conv2d(self.width, self.width, 1)
-        self.w3 = nn.Conv2d(self.width, self.width, 1)
-
-        self.fc1 = nn.Linear(self.width, 128)
-        self.fc2 = nn.Linear(128, 1)
-
-    def forward(self, x):
-        grid = self.get_grid(x.shape, x.device)
-        x = torch.cat((x, grid), dim=-1)
-        x = x.to(torch.float32)
-        x = self.fc0(x)
-        x = x.permute(0, 3, 1, 2)
-        x = F.pad(x, [0,self.padding, 0,self.padding])
-
-        x1 = self.conv0(x)
-        x2 = self.w0(x)
-        x = x1 + x2
-        x = F.gelu(x)
-
-        x1 = self.conv1(x)
-        x2 = self.w1(x)
-        x = x1 + x2
-        x = F.gelu(x)
-
-        x1 = self.conv2(x)
-        x2 = self.w2(x)
-        x = x1 + x2
-        x = F.gelu(x)
-
-        x1 = self.conv3(x)
-        x2 = self.w3(x)
-        x = x1 + x2
-
-        x = x[..., :-self.padding, :-self.padding]
-        x = x.permute(0, 2, 3, 1)
-        x = self.fc1(x)
-        x = F.gelu(x)
-        x = self.fc2(x)
-        return x
-    
-    def get_grid(self, shape, device):
-        batchsize, size_x, size_y = shape[0], shape[1], shape[2]
-        gridx = torch.tensor(np.linspace(0, 1, size_x), dtype=torch.float)
-        gridx = gridx.reshape(1, size_x, 1, 1).repeat([batchsize, 1, size_y, 1])
-        gridy = torch.tensor(np.linspace(0, 1, size_y), dtype=torch.float)
-        gridy = gridy.reshape(1, 1, size_y, 1).repeat([batchsize, size_x, 1, 1])
-        return torch.cat((gridx, gridy), dim=-1).to(device)
-
-################################################################
-# configs
-################################################################
 
 ntrain = 1000
 ntest = 200
 
 batch_size = 20
-learning_rate = 0.001
+learning_rate = 0.01
 
 epochs = 500
 step_size = 100
@@ -163,82 +22,40 @@ gamma = 0.5
 modes = 12
 width = 32
 
-################################################################
-# read data
-################################################################
+x_test = torch.from_numpy(np.load('/.../NS_data/NS_x_test.npy'))
+x_train = torch.from_numpy(np.load('/.../NS_data/NS_x_train.npy'))
+u_test = torch.from_numpy(np.load('/.../NS_data/NS_u_test.npy'))
+u_train = torch.from_numpy(np.load('/.../NS_data/NS_u_train.npy'))
 
-# Data is of the shape (number of samples, grid size)
-
-# data_generation.py
-
-x_test = torch.from_numpy(np.load('/home/v-peiyanhu/rs+fno/NS_data/NS_x_test2_xi.npy'))
-x_train = torch.from_numpy(np.load('/home/v-peiyanhu/rs+fno/NS_data/NS_x_train2_xi.npy'))
-y_test = torch.from_numpy(np.load('/home/v-peiyanhu/rs+fno/NS_data/NS_y_test2_xi.npy'))
-y_train = torch.from_numpy(np.load('/home/v-peiyanhu/rs+fno/NS_data/NS_y_train2_xi.npy'))
-
-x_test = x_test[:ntest,:,:]
-x_train = x_train[:ntrain,:,:]
-y_test = y_test[:ntest,:]
-y_train = y_train[:ntrain,:]
+x_test = x_test[:ntest,:]
+x_train = x_train[:ntrain,:]
+u_test = u_test[:ntest,:]
+u_train = u_train[:ntrain,:]
 
 x_normalizer = UnitGaussianNormalizer(x_train)
 x_train = x_normalizer.encode(x_train)
 x_test = x_normalizer.encode(x_test)
 
-y_normalizer = UnitGaussianNormalizer(y_train)
-y_train = y_normalizer.encode(y_train)
+u_normalizer = UnitGaussianNormalizer(u_train)
+u_train = u_normalizer.encode(u_train)
 
-train_loader = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(x_train, y_train), batch_size=batch_size, shuffle=True)
-test_loader = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(x_test, y_test), batch_size=batch_size, shuffle=False)
+train_loader = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(x_train, u_train), batch_size=batch_size, shuffle=True)
+test_loader = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(x_test, u_test), batch_size=batch_size, shuffle=False)
 
-################################################################
-# training and evaluation
-################################################################
-model = FNO2d(modes, modes, width, x_train.shape).cuda()
-print(count_params(model))
+# **Define a model**
 
-optimizer = Adam(model.parameters(), lr=learning_rate, weight_decay=1e-4)
-scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=gamma)
+model = NORS_space2D(modes, modes, width, x_train.shape).cuda()
 
-myloss = LpLoss(size_average=False)
-y_normalizer.cuda()
-for ep in range(epochs):
-    model.train()
-    train_l2 = 0
-    for x, y in train_loader:
-        x, y = x.cuda(), y.cuda()
+print('The model has {} parameters'. format(count_params(model)))
 
-        optimizer.zero_grad()
-        out = model(x).reshape(batch_size, y_train.shape[1], y_train.shape[2])
-        out = y_normalizer.decode(out)
-        y = y_normalizer.decode(y)
+# **Train the model**
 
-        loss = myloss(out.view(batch_size,-1), y.view(batch_size,-1))
-        loss.backward()
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-        optimizer.step()
-        train_l2 += loss.item()
+loss = LpLoss(size_average=False)
 
-    scheduler.step()
-
-    model.eval()
-    test_l2 = 0.0
-    t_inf = 0.
-    with torch.no_grad():
-        for x, y in test_loader:
-            x, y = x.cuda(), y.cuda()
-            t1 = default_timer()
-            out = model(x).reshape(batch_size, y_train.shape[1], y_train.shape[2])
-            t2 = default_timer()
-            out = y_normalizer.decode(out)
-
-            test_l2 += myloss(out.view(batch_size,-1), y.view(batch_size,-1)).item()
-            t_inf = t_inf + t2 - t1
-    # print('Inference time:{}'. format(t_inf/ntest))
-
-    train_l2/= ntrain
-    test_l2 /= ntest
-
-    print(ep, train_l2, test_l2)
-
+model, losses_train, losses_test = train_nors_2d(model, train_loader, test_loader, u_normalizer, u_train.shape,
+                                                device, loss, batch_size=batch_size, epochs=500, 
+                                                learning_rate=0.001, scheduler_step=100, 
+                                                scheduler_gamma=0.5, print_every=1)
 
