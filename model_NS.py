@@ -1,42 +1,19 @@
-from SPDEs import *
-from Rule import *
-from Model import *
-from Noise import *
-from full_visualization import *
+# adapted from https://github.com/andrisger/Feature-Engineering-with-Regularity-Structures.git
+# adapted from https://github.com/crispitagorico/Neural-SPDEs.git
 
-from IPython import embed
+from Classes.SPDEs import *
+from Classes.Rule import *
+from Classes.Model import *
+from Classes.Noise import *
+from Classes.full_visualization import *
+
+from Data.generator_sns import navier_stokes_2d
+from Data.random_forcing import GaussianRF
 
 import numpy as np
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from torch.nn.parameter import Parameter
-import matplotlib.pyplot as plt
-
-import operator
-from functools import reduce
-from functools import partial
 from timeit import default_timer
-from utilities3 import *
-
-from Adam import Adam
-
-import torch
-import numpy as np
-from numpy import True_, matlib
 import math
-import matplotlib.pyplot as plt
-from tqdm.notebook import tqdm
-import scipy.io
-import h5py
-import pickle
-import matplotlib.animation
-plt.rcParams["animation.html"] = "jshtml"
-from data.generator_sns import navier_stokes_2d
-from data.random_forcing import GaussianRF
-from timeit import default_timer
-from data.random_forcing import GaussianRF, get_twod_bj, get_twod_dW
-from NSgenerator import *
 
 torch.manual_seed(0)
 np.random.seed(0)
@@ -44,10 +21,14 @@ np.random.seed(0)
 ################################################################
 #  configurations
 ################################################################
-ntrain = 100
-ntest = 20
-N = 120
-k = 1
+ntrain = 1000
+ntest = 200
+N = 1200
+k = 100
+
+sub_x = 4
+sub_t = 1
+
 t_tradition = 0
 t_RS = 0
 
@@ -64,7 +45,6 @@ for i in range(int(N/k)):
 
     # Spatial Resolution
     s = 64
-    sub = 1
 
     # domain where we are solving
     a = [1,1]
@@ -81,6 +61,7 @@ for i in range(int(N/k)):
     t = t[0:-1]
 
     X,Y = torch.meshgrid(t, t)
+    dx = X[1,0] - X[0,0]
     f = 0.1*(torch.sin(2*math.pi*(X + Y)) + torch.cos(2*math.pi*(X + Y)))
 
     # Stochastic forcing function: sigma*dW/dt 
@@ -92,7 +73,7 @@ for i in range(int(N/k)):
     # Solve equations in batches (order of magnitude speed-up)
 
     # Batch size
-    bsize = 1
+    bsize = 10
 
     c = 0
 
@@ -103,8 +84,8 @@ for i in range(int(N/k)):
 
     for j in range(k//bsize):
 
-        # w0 = GRF.sample(bsize)
-        w0 = torch.zeros((bsize, X.shape[0], X.shape[1]), device = device)
+        w0 = GRF.sample(bsize) # (u0,xi)->u
+        # w0 = torch.zeros((bsize, X.shape[0], X.shape[1]), device = device) # xi->u
 
         sol, sol_t, force = navier_stokes_2d(a, w0, f, nu, T, delta_t, record_steps, stochastic_forcing)  
 
@@ -129,7 +110,6 @@ for i in range(int(N/k)):
         # print(j, c, t1-t0)
         t_tradition = t_tradition + t1 - t0
 
-
     # Soln: [sample, x, y, step]
     # Soln_t: [t=step*delta_t]
 
@@ -145,11 +125,14 @@ for i in range(int(N/k)):
     X, Y = X.numpy(), Y.numpy()
     IC = IC.numpy()
 
-    dx = X[1,0] - X[0,0]
+    Soln = Soln[:,::sub_t,::sub_x,::sub_x]
+    Soln_t = Soln_t[::sub_t]
+    forcing = forcing[:,::sub_t,::sub_x,::sub_x]
+    X, Y = X[::sub_x,::sub_x], Y[::sub_x,::sub_x]
+    IC = IC[:,::sub_x,::sub_x]
 
     t2 = default_timer()
 
-    # mu = lambda x: 3*x-x**3 # drift
     sigma2 = lambda x: 1 # additive diffusive term
 
     f_0 = np.zeros((k, X.shape[0], X.shape[1]))
@@ -157,88 +140,66 @@ for i in range(int(N/k)):
 
     # solutions to the linearized equation
     I_xi = SPDE(BC = 'P', IC = IC_0, mu = lambda x: 0, sigma = sigma2, eps = nu).Parabolic_2d(forcing, Soln_t, X)
-    # Parabolic_2d(a, f, nu, T, delta_t, record_steps, forcing
     # Will be used as an input to the model in order to speed up the model computation. All I_xi are solved in paralel
-
-    # rule for multiplicative equation
-    # R = Rule(kernel_deg = 2, noise_deg = -1.5, free_num = 3) # create rule with additive width m = 3
-    # R.add_component(1, {'xi':1}) # add multiplicative width l = 1
 
     R = Rule(kernel_deg = 2, noise_deg = -2, free_num = 2) # create rule with additive width 2. No multiplicative component.
 
     I = SPDE(BC = 'P', T = Soln_t, X = X, eps = nu).Integrate_Parabolic_trees_2d # initialize integration map I
 
     M = Model(integration = I, rule = R, height = 2, deg = 7.5, derivative = True) # initialize model for additive equation
-    # height = 2 / 3 / 4 / 5
-
-
-    # model for multiplicative equation
-    # M = Model(integration = I, rule = R, height = 4, deg = 5) # initialize model
+    # height = 2 / 3 
 
     # Set time-space points at which functions of the model will be evaluated and stored in memory
-    points = [(int(T/delta_t)-1,i, j) for i in range(X.shape[0]) for j in range(X.shape[1])]
+    points = [(int(T/delta_t/sub_t)-1,i, j) for i in range(X.shape[0]) for j in range(X.shape[1])]
 
-    # create model
-    # Features_for_points = M_add.create_model_points(W, lollipops = I_xi, diff = True, dt = dt, points = points)
-
-    # No trees of the form I_c[u_0] are added so the model without initial conditions is created
     # In order to add I_c[u_0] to the model need to solve 
     W_0 = np.zeros(forcing.shape)
     I_c = SPDE(BC = 'D', T = Soln_t, X = X, IC = IC, mu = lambda x: 0, sigma = lambda x: 0, eps = nu).Parabolic_2d(W_0, Soln_t, X)
 
     # # Then call
-    Features_for_points = M.create_model_points_2d(forcing, lollipops = I_xi, diff = True, X = X, dt = delta_t, batch_size = 1, extra_planted = I_c, extra_deg = 2, key = "I_c[u_0]",  points = points)
+    Features_for_points = M.create_model_points_2d(forcing, lollipops = I_xi, diff = True, X = X, dt = sub_t*delta_t, batch_size = 10, extra_planted = I_c, extra_deg = 2, key = "I_c[u_0]",  points = points)
     t3 = default_timer()
 
     if i == 0:
-        print(Features_for_points[(int(T/delta_t)-1,0,0)].columns)
+        # print(Features_for_points[(0,0,0)].columns)
         #######################################################################################################################
-        x_data = np.array([[[[Features_for_points[(int(T/delta_t)-1,i,j)].iat[n, t] for t in range(Features_for_points[(int(T/delta_t)-1,0,0)].shape[1])] for j in range(X.shape[1])] for i in range(X.shape[0])] for n in range(k)])
+        x_data = np.array([[[[Features_for_points[(int(T/delta_t/sub_t)-1,i,j)].iat[n, t] for t in range(Features_for_points[(int(T/delta_t/sub_t)-1,0,0)].shape[1])] for j in range(X.shape[1])] for i in range(X.shape[0])] for n in range(k)])
         # [sample, x, y, tree]
 
         # t3 = default_timer()
         t_RS = t_RS + t3 - t2
         print(x_data.shape)
 
-        y_data = Soln[:,int(T/delta_t)-1,:,:] 
+        u_data = Soln[:,int(T/delta_t/sub_t)-1,:,:] 
         # [sample, x, y]
         #######################################################################################################################
     else:
-        x_ = np.array([[[[Features_for_points[(int(T/delta_t)-1,i,j)].iat[n, t] for t in range(Features_for_points[(int(T/delta_t)-1,0,0)].shape[1])] for j in range(X.shape[1])] for i in range(X.shape[0])] for n in range(k)])
+        x_ = np.array([[[[Features_for_points[(int(T/delta_t/sub_t)-1,i,j)].iat[n, t] for t in range(Features_for_points[(int(T/delta_t/sub_t)-1,0,0)].shape[1])] for j in range(X.shape[1])] for i in range(X.shape[0])] for n in range(k)])
         # [sample, x, y, tree]
 
         # t3 = default_timer()
         t_RS = t_RS + t3 - t2
         print(x_data.shape)
 
-        y_ = Soln[:,int(T/delta_t)-1,:,:] 
+        u_ = Soln[:,int(T/delta_t/sub_t)-1,:,:] 
         # [sample, x, y]
 
         x_data = np.concatenate((x_, x_data), axis=0)
         print(x_data.shape)
-        y_data = np.concatenate((y_,y_data), axis=0)
-
-    # dataloader = MatReader('/home/v-peiyanhu/fourier_neural_operator/dataset/burgers_data_R10.mat')
-    # x_data = dataloader.read_field('a')[:,::sub]
-    # y_data = dataloader.read_field('u')[:,::sub]
+        u_data = np.concatenate((u_,u_data), axis=0)
 
 print('time:')
 print('Traditional Solver:{}'. format(t_tradition/N))
 print('Regularity Structure:{}'.format(t_RS/N))
 
 x_train = x_data[:ntrain,:]
-print(x_train.shape[3])
-y_train = y_data[:ntrain,:]
+print(x_train.shape)
+u_train = u_data[:ntrain,:]
 
 x_test = x_data[-ntest:,:]
-y_test = y_data[-ntest:,:]
+u_test = u_data[-ntest:,:]
 
-# x_train = x_train.reshape(ntrain,x_train.shape[1],x_train.shape[2],1)
-# x_test = x_test.reshape(ntest,x_test.shape[1],x_test.shape[2],1)
-
-# np.save("/home/v-peiyanhu/rs+fno/NS_data/NS_x_train3_xi", x_train)
-# np.save("/home/v-peiyanhu/rs+fno/NS_data/NS_x_test3_xi",x_test)
-# np.save("/home/v-peiyanhu/rs+fno/NS_data/NS_y_train3_xi",y_train)
-# np.save("/home/v-peiyanhu/rs+fno/NS_data/NS_y_test3_xi",y_test)
-
-
+np.save("/..../NS_data/NS_x_train", x_train)
+np.save("/.../NS_data/NS_x_test",x_test)
+np.save("/.../NS_data/NS_u_train",u_train)
+np.save("/.../NS_data/NS_u_test",u_test)
