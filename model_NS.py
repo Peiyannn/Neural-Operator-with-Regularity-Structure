@@ -75,13 +75,13 @@ for i in range(int(N/k)):
     bsize = 10
 
     c = 0
-
-    t0 = default_timer()
-
+    
     #Sample random fields
     # w0 = GRF.sample(1).repeat(bsize,1,1)
 
     for j in range(k//bsize):
+        
+        t0 = default_timer()
 
         w0 = GRF.sample(bsize) # (u0,xi)->u
         # w0 = torch.zeros((bsize, X.shape[0], X.shape[1]), device = device) # xi->u
@@ -106,7 +106,7 @@ for i in range(int(N/k)):
 
         c += bsize
         t1 = default_timer()
-        # print(j, c, t1-t0)
+        # print(j, c, (t1-t0)/bsize)
         t_tradition = t_tradition + t1 - t0
 
     # Soln: [sample, x, y, step]
