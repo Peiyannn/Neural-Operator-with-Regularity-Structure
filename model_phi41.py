@@ -55,13 +55,13 @@ for i in range(int(N/k)):
     
     t0 = default_timer()
     # solutions to the additive equation 
-    Soln_add = SPDE(BC = 'P', IC = IC, mu = mu, sigma = sigma2).Parabolic(W, T, X)
+    Soln_add = SPDE(BC = 'P', IC = IC, mu = mu, sigma = sigma2).Parabolic(0.1 * W, T, X)
     t1 = default_timer()
     t_tradition = t_tradition + t1 - t0
 
     t2 = default_timer()
     # solutions to the linearized equation
-    I_xi = SPDE(BC = 'P', IC = lambda x: 0, mu = lambda x: 0, sigma = sigma2).Parabolic(W, T, X)
+    I_xi = SPDE(BC = 'P', IC = lambda x: 0, mu = lambda x: 0, sigma = sigma2).Parabolic(0.1 * W, T, X)
     # (K, 51, 129)
     # Will be used as an input to the model in order to speed up the model computation. All I_xi are solved in paralel
 
