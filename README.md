@@ -22,6 +22,8 @@ We conduct experiments on the dynamic Φ41 model, the parabolic equation with mu
 
 ## Citation
 
+If you find our work useful in your research, please consider citing:
+
 ```
 @misc{hu2022neural,
   author = {Hu, Peiyan and Meng, Qi and Chen, Bingguang and Gong, Shiqi and Wang, Yue and Chen, Wei and Zhu, Rongchan and Ma, Zhi-Ming and Liu, Tie-Yan},
