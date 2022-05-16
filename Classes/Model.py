@@ -347,7 +347,7 @@ class Model():
 
     # Create dataframes of models that only contain certain space time points and not the full model. 
     
-    def create_model_points_2d(self, W, points, X, dt, batch_size, diff = True, lollipops = None, extra_planted = None, extra_deg = None, key = None):
+    def create_model_points_2d(self, W, points, X, dt, batch_size, diff = False, lollipops = None, extra_planted = None, extra_deg = None, key = None):
 
         num_noises = W.shape[0]
         
