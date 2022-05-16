@@ -156,7 +156,7 @@ for i in range(int(N/k)):
     I_c = SPDE(BC = 'D', T = Soln_t, X = X, IC = IC, mu = lambda x: 0, sigma = lambda x: 0, eps = nu).Parabolic_2d(W_0, Soln_t, X)
 
     # # Then call
-    Features_for_points = M.create_model_points_2d(forcing, lollipops = I_xi, diff = True, X = X, dt = sub_t*delta_t, batch_size = 10, extra_planted = I_c, extra_deg = 2, key = "I_c[u_0]",  points = points)
+    Features_for_points = M.create_model_points_2d(forcing, lollipops = I_xi, diff = True, X = X, dt = sub_t*delta_t, batch_size = 10, extra_planted = I_c, extra_deg = 2, key = "I_c[u_0]",  points = points, diff=False)
     t3 = default_timer()
 
     if i == 0:
