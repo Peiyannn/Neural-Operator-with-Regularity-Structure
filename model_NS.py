@@ -138,7 +138,7 @@ for i in range(int(N/k)):
     IC_0 = np.zeros((k, X.shape[0], X.shape[1]))
 
     # solutions to the linearized equation
-    I_xi = SPDE(BC = 'P', IC = IC_0, mu = lambda x: 0, sigma = sigma2, eps = nu).Parabolic_2d(forcing, Soln_t, X)
+    I_xi = SPDE(BC = 'P', IC = IC_0, mu = lambda x: 0, sigma = sigma2, eps = nu).Parabolic_2d(forcing, Soln_t, X, diff=False)
     # Will be used as an input to the model in order to speed up the model computation. All I_xi are solved in paralel
 
     R = Rule(kernel_deg = 2, noise_deg = -2, free_num = 2) # create rule with additive width 2. No multiplicative component.
